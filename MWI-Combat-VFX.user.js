@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.5
-// @description  讀條期間顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上；本版不含調整介面。
+// @version      0.1.6
+// @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
 // @icon         https://www.milkywayidle.com/favicon.svg
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.5";
-  const CANVAS_ID = "mwiCombatVfxCanvas015";
+  const VERSION = "0.1.6";
+  const CANVAS_ID = "mwiCombatVfxCanvas016";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx015Installed) return;
-  window.__mwiCombatVfx015Installed = true;
+  if (window.__mwiCombatVfx016Installed) return;
+  window.__mwiCombatVfx016Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -338,10 +338,49 @@
     ctx.restore();
   }
 
-  function verticalRing(anchor, toward, color, alpha, radius = 22) {
-    if (!anchor || !toward || alpha <= 0) return;
-    const direction = Math.sign(toward.x - anchor.x) || 1;
-    ellipseGlow(anchor.x + direction * 25, anchor.y, radius * 0.34, radius, color, alpha, 1.5);
+  function frontCastPoint(anchor, toward) {
+    if (!anchor) return null;
+    const direction = Math.sign((toward?.x ?? window.innerWidth) - anchor.x) || 1;
+    const reach = clamp(anchor.width * 0.32, 24, 38);
+    return {
+      x: anchor.x + direction * reach,
+      y: anchor.y - clamp(anchor.height * 0.04, 2, 8),
+      direction
+    };
+  }
+
+  function verticalMagicCircle(anchor, toward, color, alpha, spin, radius = 28, progress = 1) {
+    if (!anchor || alpha <= 0) return null;
+    const center = frontCastPoint(anchor, toward);
+    const rx = radius * 0.34;
+    const ry = radius;
+    ellipseGlow(center.x, center.y, rx, ry, color, alpha, 1.8);
+    ellipseGlow(center.x, center.y, rx * 0.66, ry * 0.68, color, alpha * 0.72, 1.1);
+
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.strokeStyle = rgba(color, alpha * 0.82);
+    ctx.shadowColor = rgba(color, alpha);
+    ctx.shadowBlur = 7;
+    ctx.lineWidth = 1.1;
+    for (let i = 0; i < 8; i++) {
+      const angle = spin + i * Math.PI / 4;
+      const x1 = center.x + Math.cos(angle) * rx;
+      const y1 = center.y + Math.sin(angle) * ry;
+      const x2 = center.x + Math.cos(angle) * rx * 0.72;
+      const y2 = center.y + Math.sin(angle) * ry * 0.72;
+      ctx.beginPath();
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.stroke();
+    }
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.ellipse(center.x, center.y, rx + 3, ry + 3, 0, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * clamp(progress));
+    ctx.stroke();
+    ctx.restore();
+    discGlow(center.x + center.direction * 2, center.y, 3.5, color, alpha * 0.74);
+    return center;
   }
 
   function drawArrowGlyph(point, angle, color, alpha, scale = 1) {
@@ -727,8 +766,9 @@
 
   function drawMagicProjectile(effect, p, mode) {
     const castAlpha = clamp(p / 0.16) * (1 - smoothstep(0.48, 0.70, p));
-    magicCircle(effect.sourceAnchor, effect.profile.color, castAlpha, p * 8 + effect.seed, 35);
-    if (effect.targets[0]) verticalRing(effect.sourceAnchor, effect.targets[0].point, effect.profile.color, castAlpha, 23);
+    if (effect.targets[0]) {
+      verticalMagicCircle(effect.sourceAnchor, effect.targets[0].point, effect.profile.color, castAlpha, p * 8 + effect.seed, 27);
+    }
 
     if (["frostSurge", "manaSpring", "toxicPollen", "naturesVeil", "flameBlast", "firestorm"].includes(mode)) {
       return drawMagicArea(effect, p, mode);
@@ -948,9 +988,20 @@
     const disappear = 1 - smoothstep(0.90, 1, p);
     const alpha = appear * disappear * (0.76 + Math.sin(p * Math.PI * 10) * 0.12);
     const radius = 31 + Math.sin(p * Math.PI * 4) * 3;
-    magicCircle(effect.sourceAnchor, effect.profile.color, alpha, p * Math.PI * 5 + effect.seed, radius);
-    if (effect.towardPoint) verticalRing(effect.sourceAnchor, effect.towardPoint, effect.profile.color, alpha * 0.82, 21);
+    if (!effect.supportCast && effect.towardPoint) {
+      verticalMagicCircle(
+        effect.sourceAnchor,
+        effect.towardPoint,
+        effect.profile.color,
+        alpha,
+        p * Math.PI * 5 + effect.seed,
+        radius,
+        p
+      );
+      return;
+    }
 
+    magicCircle(effect.sourceAnchor, effect.profile.color, alpha, p * Math.PI * 5 + effect.seed, radius);
     ctx.save();
     ctx.globalCompositeOperation = "lighter";
     ctx.strokeStyle = rgba(effect.profile.color, alpha * 0.92);
@@ -1314,6 +1365,7 @@
       abilityHrid,
       profile,
       sourceAnchor,
+      supportCast: Boolean(auraSpec && !ATTACK_ABILITIES.has(abilityHrid)),
       towardPoint: auraSpec && !ATTACK_ABILITIES.has(abilityHrid)
         ? null
         : (firstMonsterRect ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 } : null),
@@ -1383,13 +1435,17 @@
       };
     });
 
+    const start = STYLE_ROUTES[profile.style] === "magic"
+      ? frontCastPoint(sourceAnchor, targets[0].point)
+      : { x: sourceAnchor.x, y: sourceAnchor.y };
+
     activeEffects.push({
       id: ++effectSequence,
       seed: effectSequence * 97 + playerIndex * 19,
       abilityHrid,
       profile,
       sourceAnchor,
-      start: { x: sourceAnchor.x, y: sourceAnchor.y },
+      start: { x: start.x, y: start.y },
       targets,
       isCrit,
       enemy: false,
