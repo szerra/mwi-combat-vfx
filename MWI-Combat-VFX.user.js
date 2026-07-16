@@ -2,7 +2,7 @@
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
 // @version      0.1.4
-// @description  讀條期間顯示法陣，命中後依遊戲持續時間把流血、燃燒等狀態附著在怪物身上；本版不含任何調整介面。
+// @description  讀條期間顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上；本版不含調整介面。
 // @author       Local build for gzerr
 // @license      MIT
 // @icon         https://www.milkywayidle.com/favicon.svg
@@ -120,34 +120,27 @@
     "naturesVeil", "lifeDrain", "fireball", "flameBlast", "firestorm", "smokeBurst"
   ]);
 
-  // Damage is already applied when battle_updated reaches the browser. Start travelling
-  // effects near the end of their route so their visible impact follows the HP change closely.
-  const TRAJECTORY_IMPACT_DELAY_MS = 80;
-  const TRAJECTORY_IMPACT_PHASES = Object.freeze({
-    weapon: 0.64,
-    arrow: 0.59,
-    rainOfArrows: 0.55,
-    waterStrike: 0.64,
-    iceSpear: 0.64,
-    fireball: 0.64,
-    smokeBurst: 0.64,
-    entangle: 0.62,
-    enemyAttack: 0.64
+  const AURA_KIND_STYLES = Object.freeze({
+    manaSpring: { color: [75, 150, 255], accent: COLORS.ice },
+    criticalAura: { color: COLORS.gold, accent: COLORS.white },
+    fierceAura: { color: COLORS.red, accent: COLORS.gold },
+    guardianAura: { color: [70, 170, 255], accent: COLORS.cyan },
+    mysticAura: { color: COLORS.purple, accent: COLORS.teal },
+    speedAura: { color: COLORS.teal, accent: COLORS.cyan },
+    elementalAffinity: { color: COLORS.violet, accent: COLORS.fire }
   });
 
-  function trajectoryImpactPhase(profile) {
-    if (!profile) return 0;
-    if (TRAJECTORY_IMPACT_PHASES[profile.style]) return TRAJECTORY_IMPACT_PHASES[profile.style];
-    const route = STYLE_ROUTES[profile.style];
-    return TRAJECTORY_IMPACT_PHASES[route] || 0;
-  }
-
-  function syncedAttackStartedAt(profile) {
-    const phase = trajectoryImpactPhase(profile);
-    const duration = Number(profile?.duration) || 0;
-    if (!phase || !duration) return performance.now();
-    return performance.now() - Math.max(0, duration * phase - TRAJECTORY_IMPACT_DELAY_MS);
-  }
+  // 伺服器的完整 combatBuffMap 會提供真正的開始與結束時間；
+  // 精簡 battle_updated 沒有附 buff 表時，才用下列官方技能時間暫時補上。
+  const AURA_SPECS = Object.freeze({
+    "/abilities/mana_spring": { kind: "manaSpring", target: "party", duration: 10000 },
+    "/abilities/critical_aura": { kind: "criticalAura", target: "party", duration: 120000 },
+    "/abilities/fierce_aura": { kind: "fierceAura", target: "party", duration: 120000 },
+    "/abilities/guardian_aura": { kind: "guardianAura", target: "party", duration: 120000 },
+    "/abilities/mystic_aura": { kind: "mysticAura", target: "party", duration: 120000 },
+    "/abilities/speed_aura": { kind: "speedAura", target: "party", duration: 120000 },
+    "/abilities/elemental_affinity": { kind: "elementalAffinity", target: "self", duration: 20000 }
+  });
 
   // battle_updated 的精簡封包目前不會附 combatBuffMap，因此命中時先依技能的
   // 固定狀態時間顯示；只要後續收到完整 combatBuffMap，就以伺服器的 startTime
@@ -181,6 +174,7 @@
   let battleGeneration = 0;
   let activeEffects = [];
   let attachedStatuses = new Map();
+  let attachedAuras = new Map();
   let pageHidden = document.hidden;
 
   let monsterHp = [];
@@ -1151,6 +1145,97 @@
     return visible.size;
   }
 
+  function drawAuraGlyph(aura, anchor, now, layer) {
+    const style = AURA_KIND_STYLES[aura.kind] || AURA_KIND_STYLES.mysticAura;
+    const phase = (Date.now() - aura.createdAt) / 1000;
+    const intro = smoothstep(0, 0.28, Math.max(0, phase));
+    const remaining = Number.isFinite(aura.endAt) ? aura.endAt - Date.now() : 1000;
+    const outro = clamp(remaining / 420);
+    const pulse = 0.78 + Math.sin(phase * 3.2 + aura.seed) * 0.12;
+    const alpha = intro * outro * pulse;
+    const radius = Math.max(25, Math.min(47, anchor.width * 0.42)) + layer * 6;
+    const groundY = anchor.groundY - 2 - layer * 0.8;
+    const rotation = phase * (0.55 + layer * 0.08) + aura.seed;
+
+    ellipseGlow(anchor.x, groundY, radius, radius * 0.24, style.color, alpha * 0.78, 2.1, 0);
+    ellipseGlow(anchor.x, groundY, Math.max(12, radius - 9), Math.max(4, radius * 0.24 - 3), style.accent, alpha * 0.46, 1.2, 0);
+
+    const points = 6;
+    for (let i = 0; i < points; i++) {
+      const angle = rotation + i * Math.PI * 2 / points;
+      const x = anchor.x + Math.cos(angle) * radius;
+      const y = groundY + Math.sin(angle) * radius * 0.24;
+      const pointColor = aura.kind === "mysticAura"
+        ? [COLORS.water, COLORS.green, COLORS.fire][i % 3]
+        : (i % 2 ? style.accent : style.color);
+      discGlow(x, y, 1.8 + (i % 3) * 0.45, pointColor, alpha * 0.82);
+    }
+
+    if (aura.kind === "speedAura") {
+      for (const sign of [-1, 1]) {
+        const x = anchor.x + sign * radius * 0.54;
+        pathGlow([
+          { x: x - sign * 11, y: groundY - 7 },
+          { x: x + sign * 7, y: groundY - 10 }
+        ], style.accent, alpha * 0.58, 1.2, 5);
+      }
+    } else if (aura.kind === "guardianAura") {
+      drawShield({ x: anchor.x, y: groundY - 9 }, style.color, alpha * 0.24, 0.44 + layer * 0.03);
+    } else if (aura.kind === "criticalAura") {
+      for (let i = 0; i < 4; i++) {
+        const angle = rotation * 0.6 + i * Math.PI / 2;
+        discGlow(anchor.x + Math.cos(angle) * radius * 0.57, groundY + Math.sin(angle) * 5 - 4, 2.4, COLORS.gold, alpha * 0.9);
+      }
+    } else if (aura.kind === "manaSpring") {
+      for (let i = 0; i < 4; i++) {
+        const rise = (phase * 0.42 + i / 4) % 1;
+        drawStatusDrop(anchor.x + (i - 1.5) * 8, groundY - 4 - rise * 18, 2.2, COLORS.water, alpha * (1 - rise));
+      }
+    } else if (aura.kind === "fierceAura") {
+      for (const sign of [-1, 1]) {
+        pathGlow([
+          { x: anchor.x + sign * 7, y: groundY - 4 },
+          { x: anchor.x + sign * 17, y: groundY - 15 }
+        ], COLORS.red, alpha * 0.66, 1.5, 6);
+      }
+    } else if (aura.kind === "elementalAffinity") {
+      [COLORS.water, COLORS.green, COLORS.fire].forEach((color, index) => {
+        const angle = rotation * 0.7 + index * Math.PI * 2 / 3;
+        discGlow(anchor.x + Math.cos(angle) * radius * 0.62, groundY - 6 + Math.sin(angle) * 7, 3, color, alpha * 0.84);
+      });
+    }
+  }
+
+  function drawAttachedAuras(now) {
+    const wallNow = Date.now();
+    const { players } = findCombatUnits();
+    const visible = new Map();
+
+    for (const [key, aura] of attachedAuras) {
+      if ((Number.isFinite(aura.endAt) && aura.endAt <= wallNow) || playerHp[aura.playerIndex] <= 0) {
+        attachedAuras.delete(key);
+        continue;
+      }
+      const aggregateKey = `${aura.playerIndex}:${aura.kind}`;
+      const previous = visible.get(aggregateKey);
+      if (!previous || aura.endAt > previous.endAt) visible.set(aggregateKey, aura);
+    }
+
+    const byPlayer = new Map();
+    for (const aura of visible.values()) {
+      if (!byPlayer.has(aura.playerIndex)) byPlayer.set(aura.playerIndex, []);
+      byPlayer.get(aura.playerIndex).push(aura);
+    }
+    for (const [playerIndex, auras] of byPlayer) {
+      const player = players[playerIndex];
+      const anchor = unitAnchor(player);
+      if (!anchor) continue;
+      auras.sort((a, b) => a.kind.localeCompare(b.kind));
+      auras.forEach((aura, layer) => drawAuraGlyph(aura, anchor, now, layer));
+    }
+    return visible.size;
+  }
+
   function drawEffect(effect, now) {
     const p = clamp((now - effect.startedAt) / effect.duration);
     const style = effect.profile.style;
@@ -1181,9 +1266,10 @@
     }
     resizeCanvas();
     ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
+    const auraCount = drawAttachedAuras(now);
     const statusCount = drawAttachedStatuses(now);
     activeEffects = activeEffects.filter(effect => drawEffect(effect, now));
-    if (activeEffects.length || statusCount) animationFrame = requestAnimationFrame(render);
+    if (activeEffects.length || statusCount || auraCount) animationFrame = requestAnimationFrame(render);
   }
 
   function requestRender() {
@@ -1200,15 +1286,25 @@
     activeEffects = activeEffects.filter(effect => !(effect.kind === "cast" && effect.playerIndex === playerIndex));
   }
 
+  function getCastProfile(abilityHrid) {
+    const attackProfile = PROFILES[abilityHrid];
+    if (attackProfile?.magic && MAGIC_STYLES.has(attackProfile.style)) return attackProfile;
+    const auraSpec = AURA_SPECS[abilityHrid];
+    if (!auraSpec) return null;
+    const auraStyle = AURA_KIND_STYLES[auraSpec.kind] || AURA_KIND_STYLES.mysticAura;
+    return { style: "auraCast", color: auraStyle.color, magic: true, duration: 650 };
+  }
+
   function spawnCastEffect(playerIndex, abilityHrid, intervalValue) {
-    const profile = PROFILES[abilityHrid];
-    if (pageHidden || !profile?.magic || !MAGIC_STYLES.has(profile.style)) return;
+    const profile = getCastProfile(abilityHrid);
+    if (pageHidden || !profile) return;
+    const auraSpec = AURA_SPECS[abilityHrid];
     const { players, monsters } = findCombatUnits();
     const player = players[playerIndex];
     if (!player) return;
     const firstMonsterRect = monsters[0]?.getBoundingClientRect();
     const towardX = firstMonsterRect ? firstMonsterRect.left + firstMonsterRect.width / 2 : window.innerWidth;
-    const sourceAnchor = unitAnchor(player, towardX);
+    const sourceAnchor = unitAnchor(player, auraSpec && !ATTACK_ABILITIES.has(abilityHrid) ? null : towardX);
     if (!sourceAnchor) return;
     stopCastEffect(playerIndex);
     activeEffects.push({
@@ -1218,12 +1314,38 @@
       abilityHrid,
       profile,
       sourceAnchor,
-      towardPoint: firstMonsterRect ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 } : null,
+      towardPoint: auraSpec && !ATTACK_ABILITIES.has(abilityHrid)
+        ? null
+        : (firstMonsterRect ? { x: towardX, y: firstMonsterRect.top + firstMonsterRect.height / 2 } : null),
       seed: effectSequence * 131 + playerIndex * 29,
       duration: intervalToMilliseconds(intervalValue),
       startedAt: performance.now()
     });
     requestRender();
+  }
+
+  function visualImpactPhase(profile) {
+    const route = STYLE_ROUTES[profile.style];
+    if (route === "weapon") return 0.64;
+    if (route === "thrust") return 0.59;
+    if (route === "slash") return 0.50;
+    if (route === "blunt") return 0.54;
+    if (route === "arrow") return profile.style === "rainOfArrows" ? 0.55 : 0.59;
+    if (route === "magic") {
+      if (profile.area) return 0.52;
+      if (profile.style === "entangle") return 0.62;
+      if (profile.style === "lifeDrain") return 0.52;
+      return 0.64;
+    }
+    if (profile.style === "enemyAttack") return 0.64;
+    return 0.52;
+  }
+
+  function syncedAttackStartedAt(profile, missed = false) {
+    const now = performance.now();
+    if (missed) return now;
+    const impactDelay = 75;
+    return now - Math.max(0, profile.duration * visualImpactPhase(profile) - impactDelay);
   }
 
   function spawnPlayerAttack(playerIndex, abilityHrid, hits, isCrit = false) {
@@ -1272,7 +1394,7 @@
       isCrit,
       enemy: false,
       duration: profile.duration,
-      startedAt: syncedAttackStartedAt(profile)
+      startedAt: syncedAttackStartedAt(profile, targets.every(target => target.miss))
     });
     requestRender();
   }
@@ -1301,8 +1423,8 @@
       targets,
       isCrit,
       enemy: true,
-      duration: profile.duration,
-      startedAt: syncedAttackStartedAt(profile)
+      duration: 760,
+      startedAt: syncedAttackStartedAt(profile, false)
     });
     requestRender();
   }
@@ -1350,6 +1472,96 @@
       }
     }
     return null;
+  }
+
+  function classifyPlayerAura(mapKey, buff) {
+    const unique = String(buff?.uniqueHrid || mapKey || "").toLowerCase();
+    const type = String(buff?.typeHrid || "").toLowerCase();
+    const text = `${unique} ${type}`;
+    if (/mana_spring/.test(text)) return "manaSpring";
+    if (/critical_aura/.test(text)) return "criticalAura";
+    if (/fierce_aura/.test(text)) return "fierceAura";
+    if (/guardian_aura/.test(text)) return "guardianAura";
+    if (/mystic_aura/.test(text)) return "mysticAura";
+    if (/speed_aura/.test(text)) return "speedAura";
+    if (/elemental_affinity/.test(text)) return "elementalAffinity";
+    return "";
+  }
+
+  function upsertAttachedAura(key, next, authoritative = false) {
+    const previous = attachedAuras.get(key);
+    if (previous) {
+      next.createdAt = previous.createdAt;
+      next.seed = previous.seed;
+      if (!authoritative) next.endAt = Math.max(previous.endAt, next.endAt);
+    }
+    attachedAuras.set(key, next);
+  }
+
+  function syncExactPlayerAuras(playerIndex, buffMap) {
+    if (!buffMap || typeof buffMap !== "object") return;
+    const prefix = `exact:aura:${playerIndex}:`;
+    const seen = new Set();
+    const wallNow = Date.now();
+
+    for (const [mapKey, rawBuff] of Object.entries(buffMap)) {
+      const buff = rawBuff && typeof rawBuff === "object" ? rawBuff : null;
+      if (!buff) continue;
+      const kind = classifyPlayerAura(mapKey, buff);
+      const duration = durationNanosecondsToMilliseconds(buff.duration);
+      const startAt = parseServerTimestamp(buff.startTime);
+      if (!kind || !duration || !Number.isFinite(startAt)) continue;
+      const endAt = startAt + duration;
+      if (endAt <= wallNow) continue;
+
+      const unique = String(buff.uniqueHrid || mapKey || `${kind}:${startAt}`);
+      const key = `${prefix}${unique}`;
+      seen.add(key);
+      upsertAttachedAura(key, {
+        playerIndex,
+        kind,
+        source: "server",
+        unique,
+        startAt,
+        endAt,
+        createdAt: Math.min(wallNow, startAt),
+        seed: (playerIndex + 1) * 257 + unique.length * 19
+      }, true);
+
+      for (const [otherKey, aura] of attachedAuras) {
+        if (otherKey.startsWith(`inferred:aura:${playerIndex}:`) && aura.kind === kind) attachedAuras.delete(otherKey);
+      }
+    }
+
+    for (const key of [...attachedAuras.keys()]) {
+      if (key.startsWith(prefix) && !seen.has(key)) attachedAuras.delete(key);
+    }
+    if (seen.size) requestRender();
+  }
+
+  function applyInferredAura(casterIndex, abilityHrid) {
+    const spec = AURA_SPECS[abilityHrid];
+    if (!spec) return;
+    const wallNow = Date.now();
+    const playerCount = Math.max(playerHp.length, findCombatUnits().players.length);
+    const targets = spec.target === "party"
+      ? Array.from({ length: playerCount }, (_, index) => index).filter(index => playerHp[index] !== 0)
+      : [casterIndex];
+
+    for (const playerIndex of targets) {
+      const key = `inferred:aura:${playerIndex}:${spec.kind}:${casterIndex}`;
+      upsertAttachedAura(key, {
+        playerIndex,
+        kind: spec.kind,
+        source: abilityHrid,
+        casterIndex,
+        startAt: wallNow,
+        endAt: wallNow + spec.duration,
+        createdAt: wallNow,
+        seed: (playerIndex + 1) * 193 + (casterIndex + 1) * 43 + abilityHrid.length * 17
+      });
+    }
+    requestRender();
   }
 
   function upsertAttachedStatus(key, next, authoritative = false) {
@@ -1493,12 +1705,17 @@
       clearPendingCasts(pendingMonsterCasts);
       activeEffects = [];
       attachedStatuses.clear();
+      attachedAuras.clear();
       obj.monsters.forEach((monster, index) => {
         const buffMap = findCombatBuffMap(monster);
         if (buffMap) syncExactMonsterStatuses(index, buffMap);
       });
+      obj.players.forEach((player, index) => {
+        const buffMap = findCombatBuffMap(player);
+        if (buffMap) syncExactPlayerAuras(index, buffMap);
+      });
       scheduleInitialCastEffects(obj.players);
-      if (attachedStatuses.size) requestRender();
+      if (attachedStatuses.size || attachedAuras.size) requestRender();
       return;
     }
 
@@ -1515,8 +1732,11 @@
     }
 
     const completedPlayerCasts = [];
+    const completedAuraCasts = [];
     for (const [key, player] of playerEntries) {
       const index = Number(key);
+      const buffMap = findCombatBuffMap(player);
+      if (buffMap) syncExactPlayerAuras(index, buffMap);
       const previousMp = playerMp[index];
       const currentMp = numberOr(player.cMP, previousMp);
       const previousAtk = playerAtkCounter[index];
@@ -1528,6 +1748,9 @@
         if (ATTACK_ABILITIES.has(completedAbility)) {
           completedPlayerCasts.push({ index, abilityHrid: completedAbility, counter: currentAtk });
         }
+        if (AURA_SPECS[completedAbility]) {
+          completedAuraCasts.push({ index, abilityHrid: completedAbility });
+        }
         const nextAbility = normalizePreparingAbility(abilityHrid);
         playerPreparingAbility[index] = nextAbility;
         spawnCastEffect(index, nextAbility, player.int);
@@ -1535,6 +1758,8 @@
       if (Number.isFinite(currentMp)) playerMp[index] = currentMp;
       if (Number.isFinite(currentAtk)) playerAtkCounter[index] = currentAtk;
     }
+
+    for (const cast of completedAuraCasts) applyInferredAura(cast.index, cast.abilityHrid);
 
     for (const [key, monster] of monsterEntries) {
       const index = Number(key);
@@ -1644,7 +1869,7 @@
       if (animationFrame) cancelAnimationFrame(animationFrame);
       animationFrame = 0;
       if (ctx) ctx.clearRect(0, 0, window.innerWidth, window.innerHeight);
-    } else if (attachedStatuses.size) {
+    } else if (attachedStatuses.size || attachedAuras.size) {
       requestRender();
     }
   });
@@ -1654,5 +1879,5 @@
   hookWebSocketMessages();
   if (document.body) ensureCanvas();
 
-  console.info(`[MWI Combat VFX] ${VERSION} 已載入（攻擊特效、無調整介面）`);
+  console.info(`[MWI Combat VFX] ${VERSION} 已載入（攻擊同步、隊伍光環、無調整介面）`);
 })();
