@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.3
+// @version      0.1.4
 // @description  讀條期間顯示法陣，命中後依遊戲持續時間把流血、燃燒等狀態附著在怪物身上；本版不含任何調整介面。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.3";
-  const CANVAS_ID = "mwiCombatVfxCanvas013";
+  const VERSION = "0.1.4";
+  const CANVAS_ID = "mwiCombatVfxCanvas014";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx013Installed) return;
-  window.__mwiCombatVfx013Installed = true;
+  if (window.__mwiCombatVfx014Installed) return;
+  window.__mwiCombatVfx014Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -119,6 +119,35 @@
     "waterStrike", "iceSpear", "frostSurge", "manaSpring", "entangle", "toxicPollen",
     "naturesVeil", "lifeDrain", "fireball", "flameBlast", "firestorm", "smokeBurst"
   ]);
+
+  // Damage is already applied when battle_updated reaches the browser. Start travelling
+  // effects near the end of their route so their visible impact follows the HP change closely.
+  const TRAJECTORY_IMPACT_DELAY_MS = 80;
+  const TRAJECTORY_IMPACT_PHASES = Object.freeze({
+    weapon: 0.64,
+    arrow: 0.59,
+    rainOfArrows: 0.55,
+    waterStrike: 0.64,
+    iceSpear: 0.64,
+    fireball: 0.64,
+    smokeBurst: 0.64,
+    entangle: 0.62,
+    enemyAttack: 0.64
+  });
+
+  function trajectoryImpactPhase(profile) {
+    if (!profile) return 0;
+    if (TRAJECTORY_IMPACT_PHASES[profile.style]) return TRAJECTORY_IMPACT_PHASES[profile.style];
+    const route = STYLE_ROUTES[profile.style];
+    return TRAJECTORY_IMPACT_PHASES[route] || 0;
+  }
+
+  function syncedAttackStartedAt(profile) {
+    const phase = trajectoryImpactPhase(profile);
+    const duration = Number(profile?.duration) || 0;
+    if (!phase || !duration) return performance.now();
+    return performance.now() - Math.max(0, duration * phase - TRAJECTORY_IMPACT_DELAY_MS);
+  }
 
   // battle_updated 的精簡封包目前不會附 combatBuffMap，因此命中時先依技能的
   // 固定狀態時間顯示；只要後續收到完整 combatBuffMap，就以伺服器的 startTime
@@ -1243,7 +1272,7 @@
       isCrit,
       enemy: false,
       duration: profile.duration,
-      startedAt: performance.now()
+      startedAt: syncedAttackStartedAt(profile)
     });
     requestRender();
   }
@@ -1261,18 +1290,19 @@
       const anchor = unitAnchor(hit.element, sourceAnchor.x);
       return { index: hit.index, damage: hit.damage, anchor, point: { x: anchor.x, y: anchor.y } };
     });
+    const profile = { style: "enemyAttack", color: COLORS.enemy, duration: 760 };
     activeEffects.push({
       id: ++effectSequence,
       seed: effectSequence * 103 + monsterIndex * 31,
       abilityHrid: "enemyAttack",
-      profile: { style: "enemyAttack", color: COLORS.enemy, duration: 760 },
+      profile,
       sourceAnchor,
       start: { x: sourceAnchor.x, y: sourceAnchor.y },
       targets,
       isCrit,
       enemy: true,
-      duration: 760,
-      startedAt: performance.now()
+      duration: profile.duration,
+      startedAt: syncedAttackStartedAt(profile)
     });
     requestRender();
   }
