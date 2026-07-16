@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.4
+// @version      0.1.5
 // @description  讀條期間顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上；本版不含調整介面。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.4";
-  const CANVAS_ID = "mwiCombatVfxCanvas014";
+  const VERSION = "0.1.5";
+  const CANVAS_ID = "mwiCombatVfxCanvas015";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx014Installed) return;
-  window.__mwiCombatVfx014Installed = true;
+  if (window.__mwiCombatVfx015Installed) return;
+  window.__mwiCombatVfx015Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
