@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         MWI 戰鬥技能特效 0.1.3
+// @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
 // @version      0.1.3
 // @description  讀條期間顯示法陣，命中後依遊戲持續時間把流血、燃燒等狀態附著在怪物身上；本版不含任何調整介面。
