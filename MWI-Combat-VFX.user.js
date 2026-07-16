@@ -7,8 +7,8 @@
 // @license      MIT
 // @icon         https://www.milkywayidle.com/favicon.svg
 // @homepageURL  https://github.com/szerra/mwi-combat-vfx
-// @updateURL    https://raw.githubusercontent.com/szerra/mwi-combat-vfx/refs/heads/main/MWI-Combat-VFX.user.js
-// @downloadURL  https://raw.githubusercontent.com/szerra/mwi-combat-vfx/refs/heads/main/MWI-Combat-VFX.user.js
+// @updateURL    https://raw.githubusercontent.com/szerra/mwi-combat-vfx/main/MWI-Combat-VFX.user.js
+// @downloadURL  https://raw.githubusercontent.com/szerra/mwi-combat-vfx/main/MWI-Combat-VFX.user.js
 // @match        https://www.milkywayidle.com/*
 // @match        https://test.milkywayidle.com/*
 // @run-at       document-start
