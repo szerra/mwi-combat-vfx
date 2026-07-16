@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.6
+// @version      0.1.7
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.6";
-  const CANVAS_ID = "mwiCombatVfxCanvas016";
+  const VERSION = "0.1.7";
+  const CANVAS_ID = "mwiCombatVfxCanvas017";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx016Installed) return;
-  window.__mwiCombatVfx016Installed = true;
+  if (window.__mwiCombatVfx017Installed) return;
+  window.__mwiCombatVfx017Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -104,6 +104,14 @@
   };
 
   const ATTACK_ABILITIES = new Set(Object.keys(PROFILES));
+  const DIRECT_HEAL_ABILITIES = new Set([
+    "/abilities/minor_heal",
+    "/abilities/heal",
+    "/abilities/quick_aid",
+    "/abilities/rejuvenate",
+    "/abilities/revive",
+    "/abilities/life_drain"
+  ]);
   const STYLE_ROUTES = Object.freeze({
     weapon: "weapon",
     poke: "thrust", impale: "thrust", puncture: "thrust", penetratingStrike: "thrust",
@@ -188,6 +196,7 @@
   let playerDmgCounter = [];
   let playerCritCounter = [];
   let playerPreparingAbility = [];
+  let playerBloomChance = [];
   let pendingMonsterCasts = new Map();
 
   function ensureCanvas() {
@@ -453,6 +462,132 @@
         ? rgba([207, 221, 239], alpha)
         : effect.isCrit ? rgba([255, 220, 86], alpha) : rgba([255, 255, 255], alpha);
       ctx.fillText(label, target.point.x, y);
+      ctx.restore();
+    }
+  }
+
+  function bloomPetal(x, y, angle, length, width, color, alpha) {
+    if (alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    ctx.shadowColor = rgba(color, alpha);
+    ctx.shadowBlur = 9;
+    ctx.fillStyle = rgba(color, alpha * 0.82);
+    ctx.beginPath();
+    ctx.ellipse(length * 0.48, 0, Math.max(1, length * 0.52), Math.max(1, width), 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBloomHeal(effect, p) {
+    const target = effect.targets[0];
+    if (!target) return;
+    const color = effect.profile.color;
+    const accent = COLORS.teal;
+    const flower = [158, 255, 188];
+    const targetPoint = target.point;
+    const travel = easeInOut(clamp(p / 0.34));
+    const trailAlpha = (1 - smoothstep(0.42, 0.78, p)) * 0.92;
+    const sameTarget = effect.casterIndex === target.index;
+
+    for (let stream = 0; stream < 3; stream++) {
+      const phase = stream - 1;
+      let control;
+      if (sameTarget) {
+        control = {
+          x: effect.start.x + (32 + stream * 8) * (stream === 1 ? -1 : 1),
+          y: Math.min(effect.start.y, targetPoint.y) - 42 - stream * 8
+        };
+      } else {
+        control = {
+          x: (effect.start.x + targetPoint.x) / 2,
+          y: Math.min(effect.start.y, targetPoint.y) - 34 + phase * 16
+        };
+      }
+      const headT = clamp(travel - stream * 0.035);
+      const tailT = Math.max(0, headT - 0.30);
+      const points = [];
+      for (let i = 0; i <= 20; i++) {
+        const t = lerp(tailT, headT, i / 20);
+        const point = qBezier(effect.start, control, targetPoint, t);
+        const wave = Math.sin(t * Math.PI * 4 + stream * 2.1) * (3.5 - t * 2.2);
+        points.push({ x: point.x, y: point.y + wave });
+      }
+      pathGlow(points, stream === 1 ? accent : color, trailAlpha * (0.72 + stream * 0.1), 1.8 + stream * 0.35, 10);
+      if (headT > 0.08 && headT < 0.98) {
+        const head = qBezier(effect.start, control, targetPoint, headT);
+        bloomPetal(head.x, head.y, headT * 8 + stream * 2.1, 7, 2.5, flower, trailAlpha * 0.78);
+      }
+    }
+
+    const bloom = clamp((p - 0.16) / 0.40);
+    const alpha = fadeOut(p, 0.76);
+    if (bloom <= 0 || alpha <= 0) return;
+    const open = easeOut(bloom);
+    const center = { x: targetPoint.x, y: targetPoint.y + 5 };
+    const groundY = target.anchor?.groundY ?? targetPoint.y + 34;
+
+    ellipseGlow(center.x, groundY, 18 + open * 30, 5 + open * 8, accent, alpha * 0.72, 1.7, p * 1.8);
+    ellipseGlow(center.x, groundY, 10 + open * 20, 3 + open * 5, COLORS.water, alpha * 0.64, 1.2, -p * 2.1);
+    discGlow(center.x, center.y, 9 + open * 9, color, alpha * 0.68);
+
+    for (let i = 0; i < 8; i++) {
+      const angle = i * Math.PI / 4 + p * 0.55;
+      const radius = 7 + open * 13;
+      bloomPetal(
+        center.x + Math.cos(angle) * radius * 0.45,
+        center.y + Math.sin(angle) * radius * 0.28,
+        angle,
+        7 + open * 13,
+        2.6 + open * 3.1,
+        i % 2 ? flower : accent,
+        alpha * (0.62 + open * 0.34)
+      );
+    }
+
+    const rise = easeOut(clamp((p - 0.22) / 0.48));
+    const tridentX = center.x;
+    const tridentTop = center.y - 18 - rise * 25;
+    const tridentBottom = center.y + 22 - rise * 10;
+    pathGlow([{ x: tridentX, y: tridentBottom }, { x: tridentX, y: tridentTop }], accent, alpha * 0.9, 2.2, 9);
+    pathGlow([{ x: tridentX, y: tridentTop + 9 }, { x: tridentX, y: tridentTop - 8 }], flower, alpha, 2.1, 9);
+    pathGlow([
+      { x: tridentX, y: tridentTop + 8 },
+      { x: tridentX - 10, y: tridentTop + 1 },
+      { x: tridentX - 10, y: tridentTop - 7 }
+    ], flower, alpha * 0.88, 1.8, 8);
+    pathGlow([
+      { x: tridentX, y: tridentTop + 8 },
+      { x: tridentX + 10, y: tridentTop + 1 },
+      { x: tridentX + 10, y: tridentTop - 7 }
+    ], flower, alpha * 0.88, 1.8, 8);
+
+    for (let i = 0; i < 12; i++) {
+      const lane = rand(effect.seed, i) - 0.5;
+      const local = (p * (0.75 + rand(effect.seed + 11, i) * 0.5) + rand(effect.seed + 23, i)) % 1;
+      const x = center.x + lane * 70 + Math.sin(local * Math.PI * 3 + i) * 5;
+      const y = groundY - local * (45 + rand(effect.seed + 31, i) * 35);
+      const particleColor = i % 3 === 0 ? COLORS.water : (i % 2 ? accent : flower);
+      discGlow(x, y, 1.7 + rand(effect.seed + 41, i) * 2.3, particleColor, alpha * (1 - local) * 0.72);
+    }
+
+    if (p > 0.28) {
+      const local = clamp((p - 0.28) / 0.55);
+      const textAlpha = 1 - smoothstep(0.64, 1, local);
+      ctx.save();
+      ctx.globalCompositeOperation = "source-over";
+      ctx.font = "900 20px Arial, sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 5;
+      const y = targetPoint.y - 38 - easeOut(local) * 22;
+      ctx.strokeStyle = rgba([23, 73, 55], textAlpha * 0.96);
+      ctx.strokeText(`+${Math.round(effect.healing)}`, targetPoint.x, y);
+      ctx.fillStyle = rgba([174, 255, 204], textAlpha);
+      ctx.fillText(`+${Math.round(effect.healing)}`, targetPoint.x, y);
       ctx.restore();
     }
   }
@@ -1293,6 +1428,8 @@
     ctx.save();
     if (effect.kind === "cast") {
       drawCastingEffect(effect, p);
+    } else if (effect.kind === "bloomHeal") {
+      drawBloomHeal(effect, p);
     } else if (effect.enemy) {
       drawEnemyAttack(effect, p);
     } else {
@@ -1305,7 +1442,7 @@
       else if (route === "magic") drawMagicProjectile(effect, p, style);
     }
     ctx.restore();
-    if (effect.kind !== "cast") drawDamage(effect, p);
+    if (effect.kind !== "cast" && effect.kind !== "bloomHeal") drawDamage(effect, p);
     return p < 1;
   }
 
@@ -1481,6 +1618,37 @@
       enemy: true,
       duration: 760,
       startedAt: syncedAttackStartedAt(profile, false)
+    });
+    requestRender();
+  }
+
+  function spawnBloomHeal(casterIndex, targetIndex, healing, bloomChance) {
+    if (pageHidden || !(healing > 0)) return;
+    const { players } = findCombatUnits();
+    const caster = players[casterIndex];
+    const target = players[targetIndex];
+    if (!caster || !target) return;
+    const targetRect = target.getBoundingClientRect();
+    const targetAnchor = unitAnchor(target);
+    const sourceAnchor = unitAnchor(caster, targetRect.left + targetRect.width / 2);
+    if (!sourceAnchor || !targetAnchor) return;
+    const targetPoint = { x: targetAnchor.x, y: targetAnchor.y };
+    const start = frontCastPoint(sourceAnchor, targetPoint);
+    const duration = 1220;
+    activeEffects.push({
+      id: ++effectSequence,
+      kind: "bloomHeal",
+      casterIndex,
+      bloomChance,
+      healing,
+      profile: { style: "bloomHeal", color: [76, 235, 145], duration },
+      sourceAnchor,
+      start: { x: start.x, y: start.y },
+      targets: [{ index: targetIndex, healing, anchor: targetAnchor, point: targetPoint }],
+      seed: effectSequence * 149 + casterIndex * 37 + targetIndex * 59,
+      duration,
+      // 封包到達時補血已經發生，讓藤蔓水流正在抵達，避免特效落後血量變化。
+      startedAt: performance.now() - duration * 0.22
     });
     requestRender();
   }
@@ -1758,6 +1926,7 @@
       playerDmgCounter = obj.players.map(player => numberOr(player.damageSplatCounter, 0));
       playerCritCounter = obj.players.map(player => numberOr(player.criticalDamageSplatCounter, 0));
       playerPreparingAbility = obj.players.map(player => normalizePreparingAbility(player.preparingAbilityHrid));
+      playerBloomChance = obj.players.map(player => numberOr(player?.combatDetails?.combatStats?.bloom, 0));
       clearPendingCasts(pendingMonsterCasts);
       activeEffects = [];
       attachedStatuses.clear();
@@ -1789,6 +1958,7 @@
 
     const completedPlayerCasts = [];
     const completedAuraCasts = [];
+    const completedBloomCasts = [];
     for (const [key, player] of playerEntries) {
       const index = Number(key);
       const buffMap = findCombatBuffMap(player);
@@ -1806,6 +1976,10 @@
         }
         if (AURA_SPECS[completedAbility]) {
           completedAuraCasts.push({ index, abilityHrid: completedAbility });
+        }
+        const bloomChance = numberOr(playerBloomChance[index], 0);
+        if (bloomChance > 0 && completedAbility !== "autoAttack" && !DIRECT_HEAL_ABILITIES.has(completedAbility)) {
+          completedBloomCasts.push({ index, abilityHrid: completedAbility, bloomChance });
         }
         const nextAbility = normalizePreparingAbility(abilityHrid);
         playerPreparingAbility[index] = nextAbility;
@@ -1863,6 +2037,7 @@
     }
 
     const playerHits = [];
+    const playerHeals = [];
     for (const [key, player] of playerEntries) {
       const index = Number(key);
       const previousHp = playerHp[index];
@@ -1875,10 +2050,18 @@
       if (damage > 0) {
         const crit = Number.isFinite(previousCrit) && Number.isFinite(currentCrit) && currentCrit > previousCrit;
         playerHits.push({ index, damage, crit });
+      } else if (damage < 0) {
+        playerHeals.push({ index, healing: -damage });
       }
       if (Number.isFinite(currentHp)) playerHp[index] = currentHp;
       if (Number.isFinite(currentDmg)) playerDmgCounter[index] = currentDmg;
       if (Number.isFinite(currentCrit)) playerCritCounter[index] = currentCrit;
+    }
+    if (completedBloomCasts.length && playerHeals.length) {
+      // 綻放只治療一位最低生命百分比的隊友；若同包還含自然回血，取本次最大增量。
+      const bloomCast = completedBloomCasts[0];
+      const bloomTarget = playerHeals.slice().sort((a, b) => b.healing - a.healing)[0];
+      spawnBloomHeal(bloomCast.index, bloomTarget.index, bloomTarget.healing, bloomCast.bloomChance);
     }
     if (playerHits.length) {
       const casts = [...pendingMonsterCasts.values()].filter(cast => now - cast.createdAt <= 900);
