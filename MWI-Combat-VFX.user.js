@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         MWI 戰鬥技能特效
 // @namespace    codex.local.mwi.combat-vfx
-// @version      0.1.7
+// @version      0.1.8
 // @description  攻擊讀條時在手前方顯示法陣，彈道同步命中，並把怪物狀態與全隊光環依實際持續時間附著在角色上。
 // @author       Local build for gzerr
 // @license      MIT
@@ -18,12 +18,12 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.7";
-  const CANVAS_ID = "mwiCombatVfxCanvas017";
+  const VERSION = "0.1.8";
+  const CANVAS_ID = "mwiCombatVfxCanvas018";
   const WS_HOSTS = ["api.milkywayidle.com/ws", "api-test.milkywayidle.com/ws"];
 
-  if (window.__mwiCombatVfx017Installed) return;
-  window.__mwiCombatVfx017Installed = true;
+  if (window.__mwiCombatVfx018Installed) return;
+  window.__mwiCombatVfx018Installed = true;
 
   const clamp = (value, min = 0, max = 1) => Math.max(min, Math.min(max, value));
   const lerp = (a, b, t) => a + (b - a) * t;
@@ -296,6 +296,32 @@
     ctx.restore();
   }
 
+  // 彈道專用：保留亮芯，但外光比一般符號與爆炸線條窄，避免拖尾變成粗光柱。
+  function trailGlow(points, color, alpha, width = 1.25, blur = 8) {
+    if (!ctx || points.length < 2 || alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+    ctx.shadowColor = rgba(color, alpha * 0.82);
+    ctx.shadowBlur = blur;
+    ctx.strokeStyle = rgba(color, alpha * 0.48);
+    ctx.lineWidth = width * 1.55;
+    ctx.stroke();
+    ctx.shadowBlur = blur * 0.32;
+    ctx.strokeStyle = rgba(color, alpha * 0.96);
+    ctx.lineWidth = width;
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = rgba([248, 253, 255], alpha * 0.68);
+    ctx.lineWidth = Math.max(0.42, width * 0.22);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function ellipseGlow(x, y, rx, ry, color, alpha, width = 2, rotation = 0) {
     if (!ctx || alpha <= 0) return;
     ctx.save();
@@ -515,7 +541,7 @@
         const wave = Math.sin(t * Math.PI * 4 + stream * 2.1) * (3.5 - t * 2.2);
         points.push({ x: point.x, y: point.y + wave });
       }
-      pathGlow(points, stream === 1 ? accent : color, trailAlpha * (0.72 + stream * 0.1), 1.8 + stream * 0.35, 10);
+      trailGlow(points, stream === 1 ? accent : color, trailAlpha * (0.72 + stream * 0.1), 1.0 + stream * 0.14, 7);
       if (headT > 0.08 && headT < 0.98) {
         const head = qBezier(effect.start, control, targetPoint, headT);
         bloomPetal(head.x, head.y, headT * 8 + stream * 2.1, 7, 2.5, flower, trailAlpha * 0.78);
@@ -609,7 +635,7 @@
     for (const target of effect.targets) {
       const curve = projectileCurve(effect, target, p, 8);
       const alpha = p < 0.67 ? 1 : fadeOut(p, 0.68);
-      pathGlow(curve.points, COLORS.white, alpha, 2.4, 9);
+      trailGlow(curve.points, COLORS.white, alpha, 1.15, 7);
       if (curve.travel > 0.04 && curve.travel < 0.98) {
         const angle = Math.atan2(target.point.y - effect.start.y, target.point.x - effect.start.x);
         drawArrowGlyph(curve.head, angle, COLORS.white, alpha, 0.85);
@@ -638,8 +664,8 @@
       x: lerp(allPoints[idx].x, allPoints[idx + 1].x, partial),
       y: lerp(allPoints[idx].y, allPoints[idx + 1].y, partial)
     };
-    const width = mode === "poke" ? 1.8 : mode === "impale" ? 5.2 : 3.2;
-    pathGlow([effect.start, head], effect.profile.color, fadeOut(p, 0.67), width, 11);
+    const width = mode === "poke" ? 0.85 : mode === "impale" ? 1.75 : 1.25;
+    trailGlow([effect.start, head], effect.profile.color, fadeOut(p, 0.67), width, 8);
     if (mode === "impale") {
       for (let i = 0; i < 3; i++) ellipseGlow(head.x - i * 13, head.y, 5 + i * 5, 16 + i * 5, COLORS.white, fadeOut(p, 0.64) * 0.7, 1.2);
     }
@@ -695,7 +721,7 @@
     for (const target of targets.slice(0, 1)) {
       const travel = easeInOut(clamp((p - 0.12) / 0.38));
       const dash = { x: lerp(effect.start.x, target.point.x, travel), y: lerp(effect.start.y, target.point.y, travel) };
-      pathGlow([effect.start, dash], effect.profile.color, alpha * 0.35, 1.4, 7);
+      trailGlow([effect.start, dash], effect.profile.color, alpha * 0.35, 0.78, 5);
       const count = mode === "scratch" ? 3 : 1;
       for (let i = 0; i < count; i++) {
         const offset = (i - (count - 1) / 2) * 9;
@@ -742,7 +768,7 @@
       if (mode === "shieldBash") {
         drawShield(head, effect.profile.color, fadeOut(p, 0.68), 0.85 + travel * 0.3);
       } else {
-        pathGlow([effect.start, head], effect.profile.color, fadeOut(p, 0.68) * 0.45, mode === "smack" ? 5 : 7, 12);
+        trailGlow([effect.start, head], effect.profile.color, fadeOut(p, 0.68) * 0.48, mode === "smack" ? 1.55 : 1.95, 8);
       }
       if (p > 0.50) {
         impactRing(target.point, p, effect.profile.color, effect.seed, mode === "stunningBlow" ? 49 : 38);
@@ -817,7 +843,7 @@
     const head = { x: lerp(effect.start.x, final.point.x, travel), y: lerp(effect.start.y, final.point.y, travel) };
     const tail = { x: lerp(effect.start.x, final.point.x, Math.max(0, travel - 0.28)), y: lerp(effect.start.y, final.point.y, Math.max(0, travel - 0.28)) };
     const color = effect.profile.color;
-    pathGlow([tail, head], color, fadeOut(p, 0.67), mode === "quickShot" ? 1.6 : 2.6, mode === "quickShot" ? 7 : 11);
+    trailGlow([tail, head], color, fadeOut(p, 0.67), mode === "quickShot" ? 0.78 : 1.1, mode === "quickShot" ? 5 : 7);
     const angle = Math.atan2(final.point.y - effect.start.y, final.point.x - effect.start.x);
     drawArrowGlyph(head, angle, color, fadeOut(p, 0.67), mode === "steadyShot" ? 1.15 : 0.9);
     if (mode === "flameArrow") drawEmberTrail(effect, tail, head, p);
@@ -878,7 +904,7 @@
         const wave = Math.sin(t * Math.PI * 5 + effect.seed) * 5 * sign;
         points.push({ x: lerp(tail.x, head.x, t) + nx * wave, y: lerp(tail.y, head.y, t) + ny * wave });
       }
-      pathGlow(points, COLORS.water, alpha * 0.68, 1.1, 5);
+      trailGlow(points, COLORS.water, alpha * 0.68, 0.68, 4);
     }
   }
 
@@ -914,7 +940,7 @@
     for (const target of effect.targets.slice(0, 1)) {
       if (mode === "iceSpear") {
         const curve = projectileCurve(effect, target, p, 14);
-        pathGlow(curve.points, COLORS.ice, fadeOut(p, 0.70), 4.2, 13);
+        trailGlow(curve.points, COLORS.ice, fadeOut(p, 0.70), 1.25, 8);
         const angle = Math.atan2(target.point.y - effect.start.y, target.point.x - effect.start.x);
         ctx.save(); ctx.translate(curve.head.x, curve.head.y); ctx.rotate(angle); ctx.fillStyle = rgba([230, 253, 255], fadeOut(p, 0.70));
         ctx.beginPath(); ctx.moveTo(17, 0); ctx.lineTo(-9, -6); ctx.lineTo(-3, 0); ctx.lineTo(-9, 6); ctx.closePath(); ctx.fill(); ctx.restore();
@@ -924,7 +950,7 @@
         }
       } else if (mode === "smokeBurst") {
         const curve = projectileCurve(effect, target, p, 18);
-        pathGlow(curve.points, effect.profile.color, fadeOut(p, 0.67), 4, 14);
+        trailGlow(curve.points, effect.profile.color, fadeOut(p, 0.67), 1.15, 8);
         for (let i = 0; i < 9; i++) discGlow(curve.head.x + (rand(effect.seed, i) - 0.5) * 22, curve.head.y + (rand(effect.seed + 4, i) - 0.5) * 22, 4 + rand(effect.seed + 8, i) * 8, [80, 54, 115], fadeOut(p, 0.70) * 0.52);
         if (p > 0.50) {
           drawPoisonCloud(target.point, p, effect.seed, [105, 76, 135]);
@@ -932,7 +958,7 @@
         }
       } else if (mode === "waterStrike") {
         const curve = projectileCurve(effect, target, p, 31);
-        pathGlow(curve.points, COLORS.water, fadeOut(p, 0.70), 4, 14);
+        trailGlow(curve.points, COLORS.water, fadeOut(p, 0.70), 1.25, 8);
         drawWaterWake(effect, curve.points[0], curve.head, p);
         if (p > 0.52) {
           impactRing(target.point, p, COLORS.water, effect.seed, 44);
@@ -940,7 +966,7 @@
         }
       } else if (mode === "fireball") {
         const curve = projectileCurve(effect, target, p, 26);
-        pathGlow(curve.points, COLORS.fire, fadeOut(p, 0.70), 5.2, 16);
+        trailGlow(curve.points, COLORS.fire, fadeOut(p, 0.70), 1.55, 9);
         discGlow(curve.head.x, curve.head.y, 9, COLORS.fire, fadeOut(p, 0.70));
         drawEmberTrail(effect, curve.points[0], curve.head, p);
         if (p > 0.52) {
@@ -1063,27 +1089,116 @@
     }
   }
 
+  function drawVineLeaf(point, angle, size, alpha, color = COLORS.green) {
+    if (!point || alpha <= 0) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";
+    ctx.translate(point.x, point.y);
+    ctx.rotate(angle);
+    ctx.shadowColor = rgba(color, alpha);
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = rgba(color, alpha * 0.76);
+    ctx.strokeStyle = rgba([222, 255, 154], alpha * 0.74);
+    ctx.lineWidth = 0.65;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.quadraticCurveTo(size * 0.48, -size * 0.48, size, 0);
+    ctx.quadraticCurveTo(size * 0.48, size * 0.48, 0, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(1, 0);
+    ctx.lineTo(size * 0.82, 0);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   function drawEntangle(effect, p) {
     for (const target of effect.targets.slice(0, 1)) {
-      const travel = easeInOut(clamp((p - 0.20) / 0.42));
-      const baseA = { x: effect.start.x, y: effect.sourceAnchor.groundY };
-      const baseB = { x: target.point.x, y: target.anchor.groundY };
-      const points = [];
-      for (let i = 0; i <= 26; i++) {
-        const t = travel * i / 26;
-        points.push({ x: lerp(baseA.x, baseB.x, t), y: lerp(baseA.y, baseB.y, t) + Math.sin(t * Math.PI * 8 + effect.seed) * 6 });
-      }
-      pathGlow(points, COLORS.green, fadeOut(p, 0.82), 3, 10);
-      if (p > 0.52) {
-        for (let i = 0; i < 7; i++) {
-          const angle = lerp(Math.PI * 0.95, Math.PI * 2.05, i / 6);
-          pathGlow([
-            { x: baseB.x + Math.cos(angle) * 24, y: baseB.y },
-            { x: target.point.x + Math.cos(angle) * 14, y: target.point.y - 30 + Math.sin(angle) * 18 }
-          ], COLORS.green, fadeOut(p, 0.85), 2.5, 9);
+      const travel = easeInOut(clamp((p - 0.17) / 0.38));
+      const trailAlpha = fadeOut(p, 0.76);
+      const source = { x: effect.start.x, y: effect.start.y };
+      const end = { x: target.point.x, y: target.anchor.groundY - 10 };
+
+      for (let strand = 0; strand < 3; strand++) {
+        const phase = effect.seed * 0.07 + strand * 2.15;
+        const control = {
+          x: (source.x + end.x) / 2,
+          y: Math.min(source.y, end.y) - 22 + (strand - 1) * 13
+        };
+        const headT = clamp(travel - strand * 0.025);
+        const tailT = Math.max(0, headT - 0.58);
+        const strandPoint = t => {
+          const point = qBezier(source, control, end, t);
+          const tx = 2 * (1 - t) * (control.x - source.x) + 2 * t * (end.x - control.x);
+          const ty = 2 * (1 - t) * (control.y - source.y) + 2 * t * (end.y - control.y);
+          const length = Math.hypot(tx, ty) || 1;
+          const wave = Math.sin(t * Math.PI * 6 + phase) * (2.6 + strand * 0.65);
+          point.x += -ty / length * wave;
+          point.y += tx / length * wave;
+          return { point, angle: Math.atan2(ty, tx) };
+        };
+        const points = [];
+        for (let i = 0; i <= 28; i++) points.push(strandPoint(lerp(tailT, headT, i / 28)).point);
+        trailGlow(points, strand === 1 ? [184, 240, 64] : COLORS.green, trailAlpha * (0.72 + strand * 0.1), 0.78 + strand * 0.12, 6);
+
+        for (let leaf = 0; leaf < 3; leaf++) {
+          const t = headT - 0.12 - leaf * 0.16 + strand * 0.018;
+          if (t <= tailT + 0.03 || t >= headT - 0.02) continue;
+          const sample = strandPoint(t);
+          const side = (leaf + strand) % 2 ? 1 : -1;
+          drawVineLeaf(sample.point, sample.angle + side * 0.72, 5.5 + leaf * 0.8, trailAlpha * 0.88, leaf === 1 ? [202, 245, 74] : COLORS.green);
         }
-        drawStunStars(target.point, p, effect.seed);
       }
+
+      const bind = easeOut(clamp((p - 0.47) / 0.32));
+      const bindAlpha = fadeOut(p, 0.87);
+      if (bind <= 0 || bindAlpha <= 0) continue;
+      const ground = { x: target.point.x, y: target.anchor.groundY };
+      ellipseGlow(ground.x, ground.y, 13 + bind * 24, 4 + bind * 6, [176, 238, 57], bindAlpha * 0.74, 1.05, p * 1.4);
+      ellipseGlow(ground.x, ground.y, 8 + bind * 15, 2 + bind * 4, COLORS.green, bindAlpha * 0.64, 0.8, -p * 1.8);
+
+      for (let root = 0; root < 6; root++) {
+        const angle = lerp(Math.PI * 0.94, Math.PI * 2.06, root / 5);
+        const reach = (22 + rand(effect.seed + 91, root) * 17) * bind;
+        const tip = { x: ground.x + Math.cos(angle) * reach, y: ground.y + Math.sin(angle) * reach * 0.24 };
+        const control = { x: lerp(ground.x, tip.x, 0.52), y: ground.y - 7 - rand(effect.seed + 101, root) * 9 };
+        const points = [];
+        for (let i = 0; i <= 12; i++) points.push(qBezier(ground, control, tip, i / 12));
+        trailGlow(points, root % 2 ? COLORS.green : [190, 239, 58], bindAlpha * 0.72, 0.78, 5);
+      }
+
+      for (let vine = 0; vine < 4; vine++) {
+        const height = (42 + vine * 8 + rand(effect.seed + 131, vine) * 13) * bind;
+        const phase = effect.seed * 0.09 + vine * 1.67 + p * 2.1;
+        const points = [];
+        for (let i = 0; i <= 24; i++) {
+          const t = i / 24;
+          const radius = 3.5 + t * (5.5 + vine * 0.55);
+          points.push({
+            x: ground.x + (vine - 1.5) * 4.2 * (1 - t) + Math.sin(t * Math.PI * 3.25 + phase) * radius,
+            y: ground.y - height * t
+          });
+        }
+        trailGlow(points, vine % 2 ? [190, 239, 58] : COLORS.green, bindAlpha * (0.68 + vine * 0.06), 0.82 + vine * 0.08, 6);
+        for (const leafT of [0.34, 0.62, 0.84]) {
+          const index = Math.min(points.length - 1, Math.round(leafT * (points.length - 1)));
+          const point = points[index];
+          const previous = points[Math.max(0, index - 1)];
+          const angle = Math.atan2(point.y - previous.y, point.x - previous.x) + ((index + vine) % 2 ? 0.78 : -0.78);
+          drawVineLeaf(point, angle, 5.5 + vine * 0.45, bindAlpha * 0.82, vine % 2 ? [202, 245, 74] : COLORS.green);
+        }
+      }
+
+      for (let coil = 0; coil < 3; coil++) {
+        const y = ground.y - bind * (13 + coil * 18);
+        ellipseGlow(ground.x, y, 10 + coil * 3.2, 3.2 + coil * 0.8, coil === 1 ? [210, 250, 78] : COLORS.green, bindAlpha * (0.72 - coil * 0.1), 0.85, p * (coil % 2 ? -2 : 2));
+      }
+
+      const haloAlpha = bindAlpha * smoothstep(0.48, 0.92, bind);
+      ellipseGlow(target.point.x, target.point.y - 48, 17, 4.3, [215, 252, 73], haloAlpha, 1.15, p * 1.5);
+      discGlow(ground.x, ground.y - 3, 8 + bind * 8, COLORS.green, bindAlpha * 0.38);
     }
   }
 
@@ -1099,7 +1214,7 @@
         point.y += Math.sin(t * Math.PI * 7 + p * 10) * 5;
         points.push(point);
       }
-      pathGlow(points, [220, 43, 116], alpha * clamp(local * 3), 4, 15);
+      trailGlow(points, [220, 43, 116], alpha * clamp(local * 3), 1.3, 9);
       for (let i = 0; i < 8; i++) {
         const t = (local + i / 8) % 1;
         const point = qBezier(target.point, control, effect.start, t);
@@ -1113,7 +1228,7 @@
   function drawEnemyAttack(effect, p) {
     for (const target of effect.targets) {
       const curve = projectileCurve(effect, target, p, 18);
-      pathGlow(curve.points, COLORS.enemy, fadeOut(p, 0.70), 2.4, 10);
+      trailGlow(curve.points, COLORS.enemy, fadeOut(p, 0.70), 1.15, 7);
       if (p > 0.52) impactRing(target.point, p, COLORS.enemy, effect.seed + target.index, 29);
     }
   }
